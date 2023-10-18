@@ -1,10 +1,12 @@
 <?php
 namespace ShoppingFeed\Sdk\Api\Order;
 
+use GuzzleHttp\Psr7\MultipartStream;
 use ShoppingFeed\Sdk\Api;
 use ShoppingFeed\Sdk\Hal;
 use ShoppingFeed\Sdk\Operation;
 use ShoppingFeed\Sdk\Exception;
+use GuzzleHttp\Psr7\Utils;
 
 class OrderOperation extends Operation\AbstractBulkOperation
 {
@@ -284,7 +286,7 @@ class OrderOperation extends Operation\AbstractBulkOperation
                     'name'     => 'files[]',
                     'contents' => fopen($document->getPath(), 'rb'),
                 ];
-                $documents[] = ['type' => $document->getPath()];
+                $documents[] = ['type' => $document->getType()];
             }
 
             $payload['order'][] = [
@@ -294,22 +296,31 @@ class OrderOperation extends Operation\AbstractBulkOperation
             ];
         }
 
-        return $client->createRequest(
+        $multipart = new MultipartStream(
+            array_merge(
+                $files,
+                [
+                    [
+                        'name'     => 'body',
+                        'contents' => json_encode($payload),
+                    ],
+                ]
+            )
+        );
+
+        $request = $client->createRequest(
             'POST',
             $link->getUri(['operation' => self::TYPE_UPLOAD_DOCUMENTS]),
             [
                 'Content-Type' => 'multipart/form-data',
             ],
-            [
-                'multipart' => [
-                    $files,
-                    [
-                        'name'     => 'body',
-                        'contents' => json_encode($payload),
-                    ],
-                ],
-            ]
+            Utils::streamFor($multipart)
         );
+
+        $modify['set_headers']['Content-Type'] = 'multipart/form-data; boundary='
+            . $request->getBody()->getBoundary();
+
+        return Utils::modifyRequest($request, $modify);
     }
 
     /**

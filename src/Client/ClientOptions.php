@@ -9,7 +9,7 @@ class ClientOptions
     /**
      * @var bool
      */
-    private $baseUri = 'https://api.shopping-feed.com';
+    private $baseUri = 'http://api.shopping-feed.lan';
 
     /**
      * @var bool
