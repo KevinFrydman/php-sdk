@@ -1,23 +1,26 @@
 <?php
 namespace ShoppingFeed\Sdk\Api\Order;
 
+use GuzzleHttp\Psr7\MultipartStream;
 use ShoppingFeed\Sdk\Api;
 use ShoppingFeed\Sdk\Hal;
 use ShoppingFeed\Sdk\Operation;
 use ShoppingFeed\Sdk\Exception;
+use GuzzleHttp\Psr7\Utils;
 
 class OrderOperation extends Operation\AbstractBulkOperation
 {
     /**
      * Operation types
      */
-    const TYPE_ACCEPT        = 'accept';
-    const TYPE_CANCEL        = 'cancel';
-    const TYPE_REFUSE        = 'refuse';
-    const TYPE_SHIP          = 'ship';
-    const TYPE_REFUND        = 'refund';
-    const TYPE_ACKNOWLEDGE   = 'acknowledge';
-    const TYPE_UNACKNOWLEDGE = 'unacknowledge';
+    const TYPE_ACCEPT           = 'accept';
+    const TYPE_CANCEL           = 'cancel';
+    const TYPE_REFUSE           = 'refuse';
+    const TYPE_SHIP             = 'ship';
+    const TYPE_REFUND           = 'refund';
+    const TYPE_ACKNOWLEDGE      = 'acknowledge';
+    const TYPE_UNACKNOWLEDGE    = 'unacknowledge';
+    const TYPE_UPLOAD_DOCUMENTS = 'upload-documents';
 
     /**
      * @var array
@@ -30,6 +33,7 @@ class OrderOperation extends Operation\AbstractBulkOperation
         self::TYPE_REFUND,
         self::TYPE_ACKNOWLEDGE,
         self::TYPE_UNACKNOWLEDGE,
+        self::TYPE_UPLOAD_DOCUMENTS,
     ];
 
     /**
@@ -179,6 +183,22 @@ class OrderOperation extends Operation\AbstractBulkOperation
         return $this;
     }
 
+    public function uploadDocuments(
+        $reference,
+        $channelName,
+        UploadOrderDocumentCollection $collection
+    ): self
+    {
+        $this->addOperation(
+            $reference,
+            $channelName,
+            self::TYPE_UPLOAD_DOCUMENTS,
+            ['documents' => $collection->getDocuments()]
+        );
+
+        return $this;
+    }
+
     /**
      * Execute all declared operations
      *
@@ -225,12 +245,82 @@ class OrderOperation extends Operation\AbstractBulkOperation
     private function createRequestGenerator($type, Hal\HalLink $link, \ArrayAccess $requests)
     {
         return function (array $chunk) use ($type, $link, &$requests) {
-            $requests[] = $link->createRequest(
-                'POST',
-                ['operation' => $type],
-                ['order' => $chunk]
-            );
+            if ($type === self::TYPE_UPLOAD_DOCUMENTS) {
+                $requests[] = $this->createUploadDocumentRequest($link, $chunk);
+            } else {
+                $requests[] = $link->createRequest(
+                    'POST',
+                    ['operation' => $type],
+                    ['order' => $chunk]
+                );
+            }
         };
+    }
+
+    /**
+     * Create custom request generation callback for uploadDocument
+     *
+     * @param Hal\HalLink $link
+     * @param array       $requests
+     *
+     * @return \Psr\Http\Message\RequestInterface
+     */
+    private function createUploadDocumentRequest(Hal\HalLink $link, array $chunk)
+    {
+        $client = $link->getHalClient();
+
+        $files   = [];
+        $payload = [
+            'order' => [],
+        ];
+
+        foreach ($chunk as $operation) {
+            $reference   = $operation['reference'];
+            $channelName = $operation['channelName'];
+
+            $documents = [];
+
+            foreach ($operation['documents'] as $document) {
+                /** @var UploadOrderDocument $document */
+                $files[]     = [
+                    'name'     => 'files[]',
+                    'contents' => fopen($document->getPath(), 'rb'),
+                ];
+                $documents[] = ['type' => $document->getType()];
+            }
+
+            $payload['order'][] = [
+                'reference'   => $reference,
+                'channelName' => $channelName,
+                'documents'   => $documents,
+            ];
+        }
+
+        $multipart = new MultipartStream(
+            array_merge(
+                $files,
+                [
+                    [
+                        'name'     => 'body',
+                        'contents' => json_encode($payload),
+                    ],
+                ]
+            )
+        );
+
+        $request = $client->createRequest(
+            'POST',
+            $link->getUri(['operation' => self::TYPE_UPLOAD_DOCUMENTS]),
+            [
+                'Content-Type' => 'multipart/form-data',
+            ],
+            Utils::streamFor($multipart)
+        );
+
+        $modify['set_headers']['Content-Type'] = 'multipart/form-data; boundary='
+            . $request->getBody()->getBoundary();
+
+        return Utils::modifyRequest($request, $modify);
     }
 
     /**
